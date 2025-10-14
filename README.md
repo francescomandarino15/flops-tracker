@@ -1,7 +1,7 @@
 # flops-tracker
 
-Libreria per stimare i **FLOPs** (hardware-agnostic) durante il training di modelli ML/DL.  
-Stile **CodeCarbon**, ma la metrica tracciata è il **compute** (FLOPs), non l'energia.
+Libreria per stimare i **FLOPs** (hardware-agnostic) durante il training di modelli MachineLearning/DeepLearning.  
+Stile **CodeCarbon**, ma agnostico all'hardware, la metrica tracciata è il **compute** (FLOPs), non l'energia.
 
 ## Caratteristiche
 - `FlopsTracker`: context manager per loggare FLOPs per **batch/epoch** e salvare CSV.

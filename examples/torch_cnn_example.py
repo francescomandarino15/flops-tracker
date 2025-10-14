@@ -10,7 +10,7 @@ from flops_tracker import FlopsTracker, TorchCNNLayerwiseEstimator
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 128
 EPOCHS = 2
-NUM_WORKERS = 2
+NUM_WORKERS = 0
 PIN_MEMORY = False
 
 # Modello 

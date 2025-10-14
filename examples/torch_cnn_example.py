@@ -1,4 +1,7 @@
-import torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
+import torch
+import torch.nn as nn
+import torch.nn.functional as F, 
+import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
 
@@ -7,10 +10,10 @@ from flops_tracker import FlopsTracker, TorchCNNLayerwiseEstimator
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 128
 EPOCHS = 2
-NUM_WORKERS = 0     # evita problemi di teardown su mac/notebook
+NUM_WORKERS = 2
 PIN_MEMORY = False
 
-# Modello (architettura del prof)
+# Modello 
 class Cnn(nn.Module):
     def __init__(self, device=DEVICE):
         super().__init__()
@@ -20,13 +23,13 @@ class Cnn(nn.Module):
         self.fc2 = nn.Linear(50, 10)
         self.to(device)
     def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))      # 28->24->12
-        x = F.relu(F.max_pool2d(self.conv2(x), 2))      # 12->8->4
-        x = x.view(-1, 320)                             # 20*4*4
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))      
+        x = F.relu(F.max_pool2d(self.conv2(x), 2))      
+        x = x.view(-1, 320)                             
         x = F.relu(self.fc1(x))
         return F.log_softmax(self.fc2(x), dim=1)
 
-# Dataset Fashion-MNIST
+# Dataset 
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.2860,), (0.3530,))

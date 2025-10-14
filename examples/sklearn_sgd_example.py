@@ -1,5 +1,6 @@
-import math, csv
-import numpy as np
+import math
+import csv
+import numpy 
 from sklearn.datasets import load_breast_cancer
 from sklearn.linear_model import SGDClassifier
 from sklearn.model_selection import train_test_split
@@ -8,36 +9,52 @@ from sklearn.metrics import accuracy_score
 
 from flops_tracker import FlopsTracker, SklearnSGDEstimator
 
-RANDOM_STATE = 42
-BATCH_SIZE = 256
-EPOCHS = 5
-LR = 1e-2
-ALPHA = 1e-4
+# parametri
+batch_size = 256
+epochs = 5
+random_state = 42
+alpha = 1e-4
+learning_rate = 1e-2
 
-# Dataset
+
+# DataSet
 X, y = load_breast_cancer(return_X_y=True)
-X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y)
+X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.33, random_state=random_state, stratify=y)
+X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.3882, random_state=random_state, stratify=y_temp)
+
 scaler = StandardScaler()
-X_tr = scaler.fit_transform(X_tr); X_te = scaler.transform(X_te)
-m, f = X_tr.shape
+X_train = scaler.fit_transform(X_train)
+X_val = scaler.transform(X_val)
+X_test = scaler.transform(X_test)
+
+m, f = X_train.shape
 
 # Modello
-clf = SGDClassifier(loss="log_loss", alpha=ALPHA, learning_rate="constant", eta0=LR,
-                    max_iter=1, tol=None, random_state=RANDOM_STATE, warm_start=True)
-classes = np.unique(y_tr)
-clf.partial_fit(X_tr[:min(BATCH_SIZE, m)], y_tr[:min(BATCH_SIZE, m)], classes=classes)
+clf = SGDClassifier(
+    loss=loss,
+    alpha=alpha,
+    learning_rate="constant",
+    eta0=learning_rate,
+    random_state=random_state,
+    warm_start=True,
+    max_iter = 1, tol = None
+)
+
+classes = numpy.unique(y_train)
+init_B = min(batch_size, X_train.shape[0])
+clf.partial_fit(X_train[:init_B], y_train[:init_B], classes=classes)
 
 # Tracker
 est = SklearnSGDEstimator(n_features=f, n_classes=1)
 with FlopsTracker(estimator=est, run_name="sgd_breast_cancer") as ft:
-    for epoch in range(1, EPOCHS+1):
+    for epoch in range(1, epochs+1):
         ft.on_epoch_start()
         # shuffle per epoch
         idx = np.random.permutation(m)
         X_tr, y_tr = X_tr[idx], y_tr[idx]
-        steps = math.ceil(m / BATCH_SIZE)
+        steps = math.ceil(m / batch_size)
         for step in range(steps):
-            s, e = step * BATCH_SIZE, min((step+1)*BATCH_SIZE, m)
+            s, e = step * batch_size, min((step + 1) * batch_size, m)
             Xb, yb = X_tr[s:e], y_tr[s:e]
             clf.partial_fit(Xb, yb)
             ft.update_batch(batch_size=len(Xb))

@@ -7,3 +7,16 @@ build/
 .venv/
 .env
 .pytest_cache/
+data/
+*.csv
+
+eval*ssh-agent*
+data/
+*.csv
+
+*.pt
+*.pth
+*.npz
+*.npy
+
+.DS_Store

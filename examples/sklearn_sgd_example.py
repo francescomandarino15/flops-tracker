@@ -48,20 +48,20 @@ clf.partial_fit(X_train[:init_B], y_train[:init_B], classes=classes)
 # Tracker
 est = SklearnSGDEstimator(n_features=f, n_classes=1)
 with FlopsTracker(estimator=est, run_name="sgd_breast_cancer") as ft:
-    for epoch in range(1, epochs+1):
-        ft.on_epoch_start()
-        # shuffle per epoch
-        idx = np.random.permutation(m)
-        X_tr, y_tr = X_tr[idx], y_tr[idx]
-        steps = math.ceil(m / batch_size)
-        for step in range(steps):
-            s, e = step * batch_size, min((step + 1) * batch_size, m)
-            Xb, yb = X_tr[s:e], y_tr[s:e]
-            clf.partial_fit(Xb, yb)
-            ft.update_batch(batch_size=len(Xb))
-        ft.on_epoch_end()
-        acc = accuracy_score(y_te, clf.predict(X_te))
-        print(f"[Epoch {epoch}] acc={acc:.4f} | FLOPs_epoch={ft.epoch_logs[-1].flops_epoch:,} | cum={ft.total_flops:,}")
+  for epoch in range(1, epochs+1):
+    ft.on_epoch_start()
+    idx = np.random.permutation(m)
+    X_train = X_train[idx]
+    y_train = y_train[idx]
+    steps = math.ceil(m / batch_size)
+    for step in range(steps):
+      s, e = step * batch_size, min((step + 1) * batch_size, m)
+      Xb, yb = X_train[s:e], y_train[s:e]
+      clf.partial_fit(Xb, yb)
+      ft.update_batch(batch_size=len(Xb))
+    ft.on_epoch_end()
+    acc = accuracy_score(y_val, clf.predict(X_val))
+    print(f"[Epoch {epoch}] acc = {acc:.4f} | FLOPs_epoch = {ft.epoch_logs[-1].flops_epoch:} | cum = {ft.total_flops:}")
 
 ft.save_batch_csv("sgd_flops_batch.csv")
 ft.save_epoch_csv("sgd_flops_epoch.csv")

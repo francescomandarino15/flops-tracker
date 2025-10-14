@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flops-tracker"
+version = "0.1.0"
+description = "Hardware-agnostic FLOPs tracker (like CodeCarbon but for compute)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [{ name="Francesco", email="you@example.com" }]
+classifiers = ["Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License"]
+
+[project.optional-dependencies]
+torch = ["torch"]
+sklearn = ["scikit-learn"]
+
+[project.urls]
+Homepage = "https://github.com/<tuo-utente>/flops-tracker"

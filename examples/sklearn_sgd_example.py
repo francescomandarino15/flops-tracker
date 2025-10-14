@@ -41,7 +41,7 @@ clf = SGDClassifier(
     max_iter = 1, tol = None
 )
 
-classes = numpy.unique(y_train)
+classes = np.unique(y_train)
 init_B = min(batch_size, X_train.shape[0])
 clf.partial_fit(X_train[:init_B], y_train[:init_B], classes=classes)
 

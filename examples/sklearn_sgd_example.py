@@ -13,6 +13,7 @@ from flops_tracker import FlopsTracker, SklearnSGDEstimator
 batch_size = 256
 epochs = 5
 random_state = 42
+loss = "log_loss"
 alpha = 1e-4
 learning_rate = 1e-2
 

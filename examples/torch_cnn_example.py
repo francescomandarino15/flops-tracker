@@ -47,20 +47,16 @@ optimzr = optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
 # Estimator + Tracker
 est = TorchCNNLayerwiseEstimator(model, input_size=(1,1,28,28), training_factor=3.0)
 
-with FlopsTracker(estimator=est, run_name="cnn_fashion") as ft:
-    for epoch in range(1, EPOCHS+1):
-        ft.on_epoch_start()
-        model.train()
-        for step, (data, target) in enumerate(train_loader, 1):
-            data, target = data.to(DEVICE), target.to(DEVICE)
-            optimzr.zero_grad(set_to_none=True)
-            out = model(data)
-            loss = F.nll_loss(out, target)
-            loss.backward(); optimzr.step()
-            ft.update_batch(batch_size=data.size(0))
-        ft.on_epoch_end()
-        print(f"[Epoch {epoch}] FLOPs_epoch={ft.epoch_logs[-1].flops_epoch:,} | cum={ft.total_flops:,}")
+ft = FlopsTracker(estimator=est, run_name="cnn").torch_bind(
+    model=model,
+    optimizer=optimzr,
+    loss_fn=None,                 # usa F.nll_loss di default se None
+    train_loader=train_loader,
+    device=DEVICE,
+    autosave_prefix="cnn_flops",  # salva csv a fine run
+)
 
-ft.save_batch_csv("cnn_flops_batch.csv")
-ft.save_epoch_csv("cnn_flops_epoch.csv")
+for _ in ft(range(EPOCHS)):
+    pass
+
 print("FLOPs totali training:", ft.total_flops)

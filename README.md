@@ -29,7 +29,7 @@ for _ in ft(range(EPOCHS), print_level="epoch", export="epoch", export_prefix="r
 # Stampa per batch+epoch + CSV batch+epoch
 for _ in ft(range(EPOCHS), print_level="both", export="both", export_prefix="run1"):
     pass  # crea run1_batch.csv e run1_epoch.csv
-
+```
 
 ## Installazione
 Ambiente virtuale consigliato.
@@ -39,5 +39,5 @@ pip install -e .[torch,sklearn]
 # Oppure solo una delle due:
 # pip install -e .[torch]
 # pip install -e .[sklearn]
-
+```
 

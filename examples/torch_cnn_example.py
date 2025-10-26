@@ -44,19 +44,24 @@ val_loader   = DataLoader(val_set,   batch_size=BATCH_SIZE, shuffle=False, num_w
 model = Cnn(DEVICE)
 optimzr = optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
 
-# Estimator + Tracker
+# Estimator
 est = TorchCNNLayerwiseEstimator(model, input_size=(1,1,28,28), training_factor=3.0)
+# Tracker semplice (solo FLOPs totali)
+ft = FlopsTracker(est).torch_bind(model, optimzr, None, train_loader, device=DEVICE)
+for _ in ft(range(EPOCHS), print_level="none", export="none"):
+    pass
+print("Tot FLOPs:", ft.total_flops)
 
-ft = FlopsTracker(estimator=est, run_name="cnn").torch_bind(
-    model=model,
-    optimizer=optimzr,
-    loss_fn=None,                 # usa F.nll_loss di default se None
-    train_loader=train_loader,
-    device=DEVICE,
-    autosave_prefix="cnn_flops",  # salva csv a fine run
-)
-
-for _ in ft(range(EPOCHS)):
+# Tracker FLOPs per epoch (esporta anche il file .csv)
+ft = FlopsTracker(est, run_name="cnn").torch_bind(model, optimzr, None, train_loader, device=DEVICE)
+for _ in ft(range(EPOCHS), print_level="epoch", export="epoch", export_prefix="cnn_flops"):
     pass
 
-print("FLOPs totali training:", ft.total_flops)
+# Tracker FLOPs per epoch e batch (esporta anche i file .csv)
+ft = FlopsTracker(est, run_name="cnn").torch_bind(model, optimzr, None, train_loader, device=DEVICE)
+for _ in ft(range(EPOCHS), print_level="both", export="both", export_prefix="cnn_flops"):
+    pass
+
+
+
+

@@ -17,7 +17,6 @@ def _prod(xs) -> int:
     return p
 
 def _unwrap_parallel(model: nn.Module) -> nn.Module:
-    # Unwrap nn.DataParallel / nn.parallel.DistributedDataParallel
     if hasattr(model, "module") and isinstance(model.module, nn.Module):
         return _unwrap_parallel(model.module)
     return model
@@ -50,7 +49,6 @@ class TorchAutoEstimator(FlopsEstimator):
 
     # ---------- public API ----------
     def prepare(self):
-        # cattura I/O tensors con forward hooks
         modules = [m for m in self.model.modules() if m is not self.model]
         ios: Dict[nn.Module, Tuple[Tuple, Tuple]] = {}
         handles = []
@@ -97,7 +95,6 @@ class TorchAutoEstimator(FlopsEstimator):
         if any(True for _ in m.children()):
             s = 0
             for c in m.children():
-                # non abbiamo i/o del figlio qui; il figlio ha già avuto un hook proprio, quindi 0 qui.
                 pass
             return s
         return 0
@@ -108,7 +105,6 @@ class TorchAutoEstimator(FlopsEstimator):
     def _register_default_handlers(self):
         # ---- Linear ----
         def linear(m: nn.Linear, inp, out):
-            # in: (B, in), out: (B, out)
             x = inp[0]; B = x.shape[0] if x.ndim>1 else 1
             return 2 * int(m.in_features) * int(m.out_features)
         self._register(nn.Linear, linear)
@@ -121,7 +117,6 @@ class TorchAutoEstimator(FlopsEstimator):
             k = m.kernel_size if isinstance(m.kernel_size, tuple) else (m.kernel_size,)*dim
             groups = int(m.groups)
             out_t = out[0]
-            # out spatial
             spatial = out_t.shape[-dim:]
             HoWoDo = _prod(spatial)
             macs = HoWoDo * Cout * ( _prod(k) * Cin // groups )
@@ -131,7 +126,6 @@ class TorchAutoEstimator(FlopsEstimator):
 
         # ---- ConvTranspose[d] ----
         def convTNd(m, inp, out, dim: int):
-            # costo simile a conv forward (kernel trasposto)
             x = inp[0]
             Cout = int(m.out_channels); Cin = int(m.in_channels)
             k = m.kernel_size if isinstance(m.kernel_size, tuple) else (m.kernel_size,)*dim
@@ -147,7 +141,7 @@ class TorchAutoEstimator(FlopsEstimator):
         # ---- Pooling ----
         def avgpool(m, inp, out, dim: int):
             if not self.include_pooling_cost: return 0
-            y = out[0]; # ~1 add per elemento * kernel volume (media)
+            y = out[0]; 
             vol = 1
             if hasattr(m, "kernel_size"):
                 ks = m.kernel_size if isinstance(m.kernel_size, tuple) else (m.kernel_size,)*dim
@@ -156,7 +150,6 @@ class TorchAutoEstimator(FlopsEstimator):
         for cls, dim in ((nn.AvgPool1d,1),(nn.AvgPool2d,2),(nn.AvgPool3d,3),
                          (nn.AdaptiveAvgPool1d,1),(nn.AdaptiveAvgPool2d,2),(nn.AdaptiveAvgPool3d,3)):
             self._register(cls, lambda m,i,o,d=dim: avgpool(m,i,o,d))
-        # MaxPool: per default 0 (comparazioni trascurate)
         for cls in (nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d,
                     nn.AdaptiveMaxPool1d, nn.AdaptiveMaxPool2d, nn.AdaptiveMaxPool3d):
             self._register(cls, lambda m,i,o: 0)
@@ -165,36 +158,29 @@ class TorchAutoEstimator(FlopsEstimator):
         def norm_cost(y: torch.Tensor):
             if not self.include_norm_cost: return 0
             N = _numel(y)
-            # stima semplice: ~ 5N (mean+var+norm) per BN/LN/GN/IN
             return 5 * N
         for cls in (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.GroupNorm, nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d):
             self._register(cls, lambda m,i,o: norm_cost(o[0]))
 
         # ---- RNN / GRU / LSTM ----
-        # Notazione: input (B,T,I) o (T,B,I). Usiamo out per ricavare B,T; hidden size H dal modulo.
         def _get_BT(inp0, out0):
             x = inp0
-            # prova batch_first
             if x.ndim == 3:
-                # (B,T,I) o (T,B,I) -> infer with out shape
                 o = out0[0] if isinstance(out0, (tuple,list)) else out0
                 if o.ndim==3:
-                    # cerca dimensione che matcha batch di input
-                    if x.shape[0] == o.shape[0]:  # batch_first
+                    if x.shape[0] == o.shape[0]: 
                         return x.shape[0], x.shape[1]
                     else:
                         return x.shape[1], x.shape[0]
             return 1, 1
 
         def rnn_base_cost(B:int, T:int, I:int, H:int, gates:int):
-            # per step: gates * (I*H + H*H) MAC -> FLOPs = 2*MAC; totale * B*T
             macs = gates * (I*H + H*H)
             return 2 * macs * B * T
 
         def rnn(m: nn.RNN, inp, out):
             x = inp[0]; B,T = _get_BT(x, out)
             I = int(m.input_size); H = int(m.hidden_size)
-            # semplice RNN tanh: 1 gate
             return rnn_base_cost(B,T,I,H,gates=1)
 
         def gru(m: nn.GRU, inp, out):
@@ -216,7 +202,7 @@ class TorchAutoEstimator(FlopsEstimator):
             x = inp[0]
             if x.ndim != 3:
                 return 0
-            if x.shape[0] == out[0].shape[0]: # batch_first
+            if x.shape[0] == out[0].shape[0]: 
                 B, L, E = x.shape
             else:
                 L, B, E = x.shape
@@ -233,8 +219,7 @@ class TorchAutoEstimator(FlopsEstimator):
 
         # ---- Upsample/Interpolate ----
         def upsample(m, inp, out):
-            # costo approssimato: copy/interp per elemento output * canali
-            y = out[0]; return _numel(y)  # stima 1 op/elt (conservativa)
+            y = out[0]; return _numel(y) 
         for cls in (nn.Upsample,):
             self._register(cls, upsample)
 
@@ -244,10 +229,8 @@ class TorchAutoEstimator(FlopsEstimator):
                     nn.Identity, nn.Flatten, nn.Unflatten, nn.ReLU, nn.GELU, nn.SiLU, nn.Sigmoid, nn.Tanh,
                     nn.AdaptiveLogSoftmaxWithLoss, nn.Softmax, nn.LogSoftmax, nn.Softmin, nn.LogSigmoid):
             self._register(cls, zero_cost)
-        # Embedding: lookup (0 FLOPs)
         for cls in (nn.Embedding, nn.EmbeddingBag):
             self._register(cls, zero_cost)
-        # Padding layers: 0 FLOPs
         for cls in (nn.ReflectionPad1d, nn.ReflectionPad2d, nn.ReflectionPad3d,
                     nn.ReplicationPad1d, nn.ReplicationPad2d, nn.ReplicationPad3d,
                     nn.ZeroPad2d, nn.ConstantPad1d, nn.ConstantPad2d, nn.ConstantPad3d):

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Iterable, Callable, Any, Dict, Literal
+from typing import List, Optional, Iterable, Callable, Any, Dict, Literal, Union
 import csv, time
 
 from .estimators.base import FlopsEstimator
@@ -21,6 +21,7 @@ class FlopsTracker:
     Tracker generico dei FLOPs (hardware-agnostici).
     - Può essere "bindato" a PyTorch con .torch_bind(...)
     - È *iterabile* (stile tqdm): for _ in ft(range(EPOCHS), ...): pass
+    - One-liner: total = FlopsTracker(...).torch_bind(...).run(EPOCHS, ...)
     """
     def __init__(
         self,
@@ -98,7 +99,7 @@ class FlopsTracker:
             for r in self.epoch_logs:
                 w.writerow([r.epoch,r.flops_epoch,r.flops_total_cum])
 
-    # -------------------- PyTorch binding (stile tqdm) --------------------
+    # -------------------- PyTorch binding --------------------
     def torch_bind(
         self,
         model: Any,
@@ -120,9 +121,34 @@ class FlopsTracker:
         }
         return self
 
+    # --------- ONE-LINER: esegui N epoche e RITORNA i FLOPs totali ----------
+    def run(
+        self,
+        epochs: int,
+        *,
+        print_level: Literal["none","epoch","batch","both"] = "none",
+        export: Literal["none","batch","epoch","both"] = "none",
+        export_prefix: Optional[str] = None,
+        on_epoch_end: Optional[Callable[['FlopsTracker', int], None]] = None,
+    ) -> int:
+        """
+        Esegui il training interno per 'epochs' epoche e ritorna i FLOPs totali.
+        Uso: total = FlopsTracker(est).torch_bind(...).run(EPOCHS, print_level="none", export="none")
+        """
+        for _ in self(
+            range(epochs),
+            print_level=print_level,
+            export=export,
+            export_prefix=export_prefix,
+            on_epoch_end=on_epoch_end,
+        ):
+            pass
+        return int(self.total_flops)
+
+    # ------------- Iterabile: accetta ITERABILE o un INTERO -----------
     def __call__(
         self,
-        epoch_iterable: Iterable[int],
+        epoch_iterable: Union[int, Iterable[int]],
         *,
         # stampa
         print_level: Literal["none","epoch","batch","both"] = "epoch",
@@ -133,10 +159,19 @@ class FlopsTracker:
         on_epoch_end: Optional[Callable[['FlopsTracker', int], None]] = None,
     ):
         """
-        Rende l'istanza *iterabile* e gestisce il training loop.
-        Uso:
-            for _ in ft(range(EPOCHS), print_level="epoch", export="epoch", export_prefix="cnn_flops"): pass
+        Se passi un iterabile: ritorna un *generator* (stile tqdm).
+        Se passi un intero N: esegue N epoche e ritorna i FLOPs totali (come run()).
         """
+        # Comportamento ONE-LINER quando viene passato un intero
+        if isinstance(epoch_iterable, int):
+            return self.run(
+                epochs=epoch_iterable,
+                print_level=print_level,
+                export=export,
+                export_prefix=export_prefix,
+                on_epoch_end=on_epoch_end,
+            )
+
         if self._torch_ctx is None:
             raise RuntimeError("torch_bind non chiamato: configura prima il contesto PyTorch.")
 
@@ -156,7 +191,7 @@ class FlopsTracker:
             except StopIteration:
                 device = "cpu"
 
-        # assicura prepare() fatta
+        # assicura prepare()
         self.start()
 
         import torch.nn.functional as F

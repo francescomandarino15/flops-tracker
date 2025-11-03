@@ -22,7 +22,7 @@ class FlopsTracker:
     - .torch_bind(...) per il training PyTorch
     - Iterabile (stile tqdm): for _ in ft(range(EPOCHS), ...): pass
     - One-liner: total = FlopsTracker(...).torch_bind(...).run(EPOCHS, ...)
-    - Opzionale: logging su Weights & Biases (W&B)
+    - Opzionale: logging su Weights & Biases (W&B) con token ed entity passabili da argomento
     """
     def __init__(
         self,
@@ -171,6 +171,8 @@ class FlopsTracker:
         wandb_config: Optional[Dict[str, Any]] = None,
         wandb_log: Literal["none","batch","epoch","both"] = "none",
         wandb_only_rank0: bool = True,
+        wandb_entity: Optional[str] = None,     
+        wandb_token: Optional[str] = None,      
     ) -> int:
         for _ in self(
             range(epochs),
@@ -185,6 +187,8 @@ class FlopsTracker:
             wandb_config=wandb_config,
             wandb_log=wandb_log,
             wandb_only_rank0=wandb_only_rank0,
+            wandb_entity=wandb_entity,      
+            wandb_token=wandb_token,        
         ):
             pass
         return int(self.total_flops)
@@ -208,6 +212,8 @@ class FlopsTracker:
         wandb_config: Optional[Dict[str, Any]] = None,
         wandb_log: Literal["none","batch","epoch","both"] = "none",
         wandb_only_rank0: bool = True,
+        wandb_entity: Optional[str] = None,    
+        wandb_token: Optional[str] = None,      
     ):
         # Se passi un intero, comportati come run()
         if isinstance(epoch_iterable, int):
@@ -219,6 +225,7 @@ class FlopsTracker:
                 on_epoch_end=on_epoch_end,
                 wandb=wandb, wandb_project=wandb_project, wandb_run_name=wandb_run_name,
                 wandb_config=wandb_config, wandb_log=wandb_log, wandb_only_rank0=wandb_only_rank0,
+                wandb_entity=wandb_entity, wandb_token=wandb_token,
             )
 
         if self._torch_ctx is None:
@@ -236,6 +243,8 @@ class FlopsTracker:
             config=wandb_config or {},
             log_mode=wandb_log,
             only_rank0=wandb_only_rank0,
+            entity=wandb_entity,          
+            token=wandb_token,            
         )
 
         ctx = self._torch_ctx
@@ -303,7 +312,9 @@ class FlopsTracker:
         self._wandb_finish()
 
     # -------------------- Wandb helpers --------------------
-    def _wandb_setup(self, enable: bool, project: Optional[str], run_name: Optional[str], config: Dict[str, Any], log_mode: str, only_rank0: bool):
+    def _wandb_setup(self, enable: bool, project: Optional[str], run_name: Optional[str],
+                     config: Dict[str, Any], log_mode: str, only_rank0: bool,
+                     entity: Optional[str] = None, token: Optional[str] = None):
         self._wb_enabled = False
         if not enable:
             return
@@ -325,9 +336,17 @@ class FlopsTracker:
             print("[flops-tracker] wandb non installato: `pip install wandb` per abilitare il logging.")
             return
 
+        # login programmatico (solo rank0 se richiesto)
+        if token and self._wb["is_rank0"]:
+            try:
+                wandb.login(key=token, relogin=True)
+            except Exception as e:
+                print(f"[flops-tracker] wandb.login fallito: {e}")
+
         if self._wb["only_rank0"] and (not self._wb["is_rank0"]):
-            self._wb_enabled = True 
-            self._wb["log_mode"] = "none"  
+            # non inizializzare run su rank!=0
+            self._wb_enabled = True
+            self._wb["log_mode"] = "none"
             self._wb["project"] = project
             self._wb["run_name"] = run_name
             self._wb["config"] = config
@@ -336,10 +355,13 @@ class FlopsTracker:
 
         # init effettivo
         try:
-            self._wb["run"] = wandb.init(project=project or "flops-tracker",
-                                         name=run_name or self.run_name,
-                                         config=config or {},
-                                         reinit=True)
+            self._wb["run"] = wandb.init(
+                project=project or "flops-tracker",
+                name=run_name or self.run_name,
+                entity=entity,               # <-- entity opzionale
+                config=config or {},
+                reinit=True
+            )
             self._wb["project"] = project or "flops-tracker"
             self._wb["run_name"] = run_name or self.run_name
             self._wb["config"] = config or {}
@@ -358,7 +380,7 @@ class FlopsTracker:
         if run is None:
             return
         try:
-            import wandb  
+            import wandb  # type: ignore
             wandb.log(payload, commit=commit)
         except Exception as e:
             print(f"[flops-tracker] wandb.log fallito: {e}")
@@ -372,7 +394,7 @@ class FlopsTracker:
         if run is None:
             return
         try:
-            import wandb  
+            import wandb  # type: ignore
             wandb.finish()
         except Exception:
             pass

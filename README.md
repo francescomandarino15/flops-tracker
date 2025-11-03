@@ -67,7 +67,7 @@ total = (FlopsTracker(est)
          .run(EPOCHS,
               print_level="epoch",                    # stampa locale
               export="epoch", export_prefix="run1",   # CSV opzionali
-              wandb=True,                             # <— abilita W&B
+              wandb=True,                             # <— abilita 
               wandb_project="flops-tracker",
               wandb_run_name="cnn-baseline",
               wandb_config={"model":"Cnn28x28","batch_size":128},

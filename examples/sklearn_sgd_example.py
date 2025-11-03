@@ -1,68 +1,98 @@
-import math
-import csv
 import numpy as np
 from sklearn.datasets import load_breast_cancer
-from sklearn.linear_model import SGDClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import accuracy_score
 
-from flops_tracker import FlopsTracker, SklearnSGDEstimator
+from flops_tracker import FlopsTracker
+from flops_tracker.estimators import SklearnSGDEstimator
 
-# parametri
-batch_size = 256
-epochs = 5
-random_state = 42
-loss = "log_loss"
-alpha = 1e-4
-learning_rate = 1e-2
+# Config
+EPOCHS = 5
+BATCH_SIZE = 128
+RUN_NAME = "sgd_breast_cancer"
 
 
-# DataSet
+# Dataset
 X, y = load_breast_cancer(return_X_y=True)
-X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.33, random_state=random_state, stratify=y)
-X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.3882, random_state=random_state, stratify=y_temp)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
 
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
-X_val = scaler.transform(X_val)
-X_test = scaler.transform(X_test)
+X_test  = scaler.transform(X_test)
 
-m, f = X_train.shape
+n_samples, n_features = X_train.shape
+classes = np.unique(y)
+n_classes = classes.size
 
-# Modello
+
+# Modello SKLearn (SGD)
 clf = SGDClassifier(
-    loss=loss,
-    alpha=alpha,
+    loss="log_loss",          
+    penalty="l2",
+    alpha=1e-4,
     learning_rate="constant",
-    eta0=learning_rate,
-    random_state=random_state,
-    warm_start=True,
-    max_iter = 1, tol = None
+    eta0=0.01,
+    max_iter=1,
+    random_state=42
 )
 
-classes = np.unique(y_train)
-init_B = min(batch_size, X_train.shape[0])
-clf.partial_fit(X_train[:init_B], y_train[:init_B], classes=classes)
+# Stimatore FLOPs SKLearn
+# Formula (per-batch): ≈ 4 * B * n_features * n_classes
+est = SklearnSGDEstimator(
+    model=clf,
+    n_features=n_features,
+    n_classes=n_classes
+)
 
-# Tracker
-est = SklearnSGDEstimator(n_features=f, n_classes=1)
-with FlopsTracker(estimator=est, run_name="sgd_breast_cancer") as ft:
-  for epoch in range(1, epochs+1):
-    ft.on_epoch_start()
-    idx = np.random.permutation(m)
-    X_train = X_train[idx]
-    y_train = y_train[idx]
-    steps = math.ceil(m / batch_size)
-    for step in range(steps):
-      s, e = step * batch_size, min((step + 1) * batch_size, m)
-      Xb, yb = X_train[s:e], y_train[s:e]
-      clf.partial_fit(Xb, yb)
-      ft.update_batch(batch_size=len(Xb))
-    ft.on_epoch_end()
-    acc = accuracy_score(y_val, clf.predict(X_val))
-    print(f"[Epoch {epoch}] acc = {acc:.4f} | FLOPs_epoch = {ft.epoch_logs[-1].flops_epoch:} | cum = {ft.total_flops:}")
+# Tracker (modalità manuale)
+# Salviamo sia logs per-epoch che per-batch (CSV a fine training).
+ft = FlopsTracker(
+    estimator=est,
+    run_name=RUN_NAME,
+    keep_epoch_logs=True,
+    keep_batch_logs=True
+)
 
-ft.save_batch_csv("sgd_flops_batch.csv")
-ft.save_epoch_csv("sgd_flops_epoch.csv")
-print("FLOPs totali:", ft.total_flops)
+def batch_iter(X, y, batch_size):
+    n = X.shape[0]
+    for i in range(0, n, batch_size):
+        j = min(i + batch_size, n)
+        yield X[i:j], y[i:j]
+
+# Training
+with ft: 
+    for epoch in range(1, EPOCHS + 1):
+        ft.on_epoch_start()
+
+        # shuffle per-epoch
+        idx = np.random.permutation(X_train.shape[0])
+        X_train_shuf = X_train[idx]
+        y_train_shuf = y_train[idx]
+
+        for Xb, yb in batch_iter(X_train_shuf, y_train_shuf, BATCH_SIZE):
+            if not hasattr(clf, "classes_"):
+                clf.partial_fit(Xb, yb, classes=classes)
+            else:
+                clf.partial_fit(Xb, yb)
+            ft.update_batch(batch_size=Xb.shape[0])
+
+        ft.on_epoch_end()
+
+        # stampa per-epoch 
+        last = ft.epoch_logs[-1]
+        print(f"[Epoch {last.epoch}] FLOPs_epoch={last.flops_epoch:,} | cum={last.flops_total_cum:,}")
+
+# Export CSV 
+ft.save_epoch_csv(f"{RUN_NAME}_epoch.csv")
+ft.save_batch_csv(f"{RUN_NAME}_batch.csv")
+
+print("FLOPs totali training:", f"{ft.total_flops:,}")
+
+# Valutazione
+y_pred = clf.predict(X_test)
+acc = accuracy_score(y_test, y_pred)
+print("Accuracy test:", f"{acc:.4f}")

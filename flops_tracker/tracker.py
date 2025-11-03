@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Optional, Iterable, Callable, Any, Dict, Literal, Union
-import csv, time
+import csv, time, os
 
 from .estimators.base import FlopsEstimator
 
@@ -19,17 +19,18 @@ class EpochLog:
 class FlopsTracker:
     """
     Tracker generico dei FLOPs (hardware-agnostici).
-    - Può essere "bindato" a PyTorch con .torch_bind(...)
-    - È *iterabile* (stile tqdm): for _ in ft(range(EPOCHS), ...): pass
+    - .torch_bind(...) per il training PyTorch
+    - Iterabile (stile tqdm): for _ in ft(range(EPOCHS), ...): pass
     - One-liner: total = FlopsTracker(...).torch_bind(...).run(EPOCHS, ...)
+    - Opzionale: logging su Weights & Biases (W&B)
     """
     def __init__(
         self,
         estimator: FlopsEstimator,
         run_name: str = "run",
         log_wall_time: bool = True,
-        keep_batch_logs: bool = False,   # se False, non salva lo storico per-batch
-        keep_epoch_logs: bool = True,    # se False, non salva lo storico per-epoch
+        keep_batch_logs: bool = False,
+        keep_epoch_logs: bool = True,
     ):
         self.estimator = estimator
         self.run_name = run_name
@@ -48,7 +49,19 @@ class FlopsTracker:
         # ---- torch bind state (opzionale) ----
         self._torch_ctx: Optional[Dict[str, Any]] = None
 
-    # Context manager
+        # --- gestione log con Wandb (opzionale) ---
+        self._wb_enabled = False
+        self._wb = {
+            "project": None,
+            "run_name": None,
+            "config": None,
+            "log_mode": "none",  # "none" | "batch" | "epoch" | "both"
+            "only_rank0": True,  # in DDP logga solo rank0
+            "is_rank0": True,    # determinato automaticamente
+            "run": None,         # oggetto wandb.run
+        }
+
+    # ------------- Context manager -------------
     def __enter__(self): self.start(); return self
     def __exit__(self, exc_type, exc, tb): self.stop()
 
@@ -57,9 +70,11 @@ class FlopsTracker:
             self.estimator.prepare()
         self._t0 = time.time()
 
-    def stop(self): pass
+    def stop(self):
+        # chiudi eventualmente wandb
+        self._wandb_finish()
 
-    # Epoch boundaries
+    # ------------- Epoch boundaries -------------
     def on_epoch_start(self):
         self._epoch += 1
         self._step = 0
@@ -68,8 +83,16 @@ class FlopsTracker:
     def on_epoch_end(self):
         if self.keep_epoch_logs:
             self.epoch_logs.append(EpochLog(self._epoch, self._epoch_flops, self.total_flops))
+        # W&B epoch-level
+        if self._wb_enabled and self._wb["is_rank0"] and self._wb["log_mode"] in ("epoch","both"):
+            payload = {
+                "flops/epoch": self._epoch_flops,
+                "flops/total_cum": self.total_flops,
+                "epoch": self._epoch,
+            }
+            self._wandb_log(payload, commit=True)
 
-    # Batch update
+    # ------------- Batch update -------------
     def update_batch(self, batch_size:int):
         self._step += 1
         t1 = time.time()
@@ -80,7 +103,19 @@ class FlopsTracker:
         if self.keep_batch_logs:
             self.step_logs.append(StepLog(self._epoch, self._step, batch_size, fb, self._epoch_flops, self.total_flops, wall))
 
-    # Export CSV (solo se i log esistono)
+        # W&B batch-level
+        if self._wb_enabled and self._wb["is_rank0"] and self._wb["log_mode"] in ("batch","both"):
+            payload = {
+                "flops/batch": fb,
+                "flops/epoch_cum": self._epoch_flops,
+                "flops/total_cum": self.total_flops,
+                "epoch": self._epoch,
+                "step": self._step,
+                "batch_size": batch_size,
+            }
+            self._wandb_log(payload, commit=False)
+
+    # ------------- CSV export -------------
     def save_batch_csv(self, path:str):
         if not self.keep_batch_logs:
             raise RuntimeError("keep_batch_logs=False: nessun log per-batch disponibile.")
@@ -110,7 +145,6 @@ class FlopsTracker:
         *,
         zero_grad_kwargs: Optional[dict] = None,
     ) -> 'FlopsTracker':
-        """Configura il contesto PyTorch (training loop gestito internamente)."""
         self._torch_ctx = {
             "model": model,
             "optimizer": optimizer,
@@ -121,7 +155,7 @@ class FlopsTracker:
         }
         return self
 
-    # --------- ONE-LINER: esegui N epoche e RITORNA i FLOPs totali ----------
+    # -------------------- ONE-LINER --------------------
     def run(
         self,
         epochs: int,
@@ -130,22 +164,32 @@ class FlopsTracker:
         export: Literal["none","batch","epoch","both"] = "none",
         export_prefix: Optional[str] = None,
         on_epoch_end: Optional[Callable[['FlopsTracker', int], None]] = None,
+        # --- W&B ---
+        wandb: bool = False,
+        wandb_project: Optional[str] = None,
+        wandb_run_name: Optional[str] = None,
+        wandb_config: Optional[Dict[str, Any]] = None,
+        wandb_log: Literal["none","batch","epoch","both"] = "none",
+        wandb_only_rank0: bool = True,
     ) -> int:
-        """
-        Esegui il training interno per 'epochs' epoche e ritorna i FLOPs totali.
-        Uso: total = FlopsTracker(est).torch_bind(...).run(EPOCHS, print_level="none", export="none")
-        """
         for _ in self(
             range(epochs),
             print_level=print_level,
             export=export,
             export_prefix=export_prefix,
             on_epoch_end=on_epoch_end,
+            # W&B
+            wandb=wandb,
+            wandb_project=wandb_project,
+            wandb_run_name=wandb_run_name,
+            wandb_config=wandb_config,
+            wandb_log=wandb_log,
+            wandb_only_rank0=wandb_only_rank0,
         ):
             pass
         return int(self.total_flops)
 
-    # ------------- Iterabile: accetta ITERABILE o un INTERO -----------
+    # -------------------- Iterabile / tqdm-like --------------------
     def __call__(
         self,
         epoch_iterable: Union[int, Iterable[int]],
@@ -155,14 +199,17 @@ class FlopsTracker:
         # export CSV
         export: Literal["none","batch","epoch","both"] = "none",
         export_prefix: Optional[str] = None,
-        # callback opzionale
+        # callback
         on_epoch_end: Optional[Callable[['FlopsTracker', int], None]] = None,
+        # --- W&B ---
+        wandb: bool = False,
+        wandb_project: Optional[str] = None,
+        wandb_run_name: Optional[str] = None,
+        wandb_config: Optional[Dict[str, Any]] = None,
+        wandb_log: Literal["none","batch","epoch","both"] = "none",
+        wandb_only_rank0: bool = True,
     ):
-        """
-        Se passi un iterabile: ritorna un *generator* (stile tqdm).
-        Se passi un intero N: esegue N epoche e ritorna i FLOPs totali (come run()).
-        """
-        # Comportamento ONE-LINER quando viene passato un intero
+        # Se passi un intero, comportati come run()
         if isinstance(epoch_iterable, int):
             return self.run(
                 epochs=epoch_iterable,
@@ -170,14 +217,26 @@ class FlopsTracker:
                 export=export,
                 export_prefix=export_prefix,
                 on_epoch_end=on_epoch_end,
+                wandb=wandb, wandb_project=wandb_project, wandb_run_name=wandb_run_name,
+                wandb_config=wandb_config, wandb_log=wandb_log, wandb_only_rank0=wandb_only_rank0,
             )
 
         if self._torch_ctx is None:
             raise RuntimeError("torch_bind non chiamato: configura prima il contesto PyTorch.")
 
-        # abilita/disabilita raccolta log in base a export richiesto
+        # log collection toggles per CSV
         self.keep_batch_logs = export in ("batch","both")
         self.keep_epoch_logs = True if export in ("epoch","both") else self.keep_epoch_logs
+
+        # --- W&B init (se richiesto) ---
+        self._wandb_setup(
+            enable=wandb,
+            project=wandb_project,
+            run_name=wandb_run_name or self.run_name,
+            config=wandb_config or {},
+            log_mode=wandb_log,
+            only_rank0=wandb_only_rank0,
+        )
 
         ctx = self._torch_ctx
         model = ctx["model"]
@@ -191,7 +250,6 @@ class FlopsTracker:
             except StopIteration:
                 device = "cpu"
 
-        # assicura prepare()
         self.start()
 
         import torch.nn.functional as F
@@ -211,16 +269,14 @@ class FlopsTracker:
                 loss = F.nll_loss(out, target) if loss_fn is None else loss_fn(out, target)
                 loss.backward(); optim.step()
 
-                # FLOPs
+                # FLOPs + W&B batch log
                 self.update_batch(batch_size=data.size(0))
 
-                # stampa per-batch (se richiesto)
                 if print_level in ("batch","both"):
-                    print(f"[Epoch {self._epoch:02d} Step {step:04d}] batch_FLOPs={self._epoch_flops:,} (epoch cum) | total={self.total_flops:,}")
+                    print(f"[Epoch {self._epoch:02d} Step {step:04d}] batch_size={data.size(0)} | epoch_cum={self._epoch_flops:,} | total={self.total_flops:,}")
 
             self.on_epoch_end()
 
-            # callback e stampa per-epoch
             if on_epoch_end is not None:
                 on_epoch_end(self, self._epoch)
 
@@ -229,18 +285,97 @@ class FlopsTracker:
                     last = self.epoch_logs[-1]
                     print(f"[Epoch {last.epoch:02d}] FLOPs_epoch={last.flops_epoch:,} | cum={last.flops_total_cum:,}")
                 else:
-                    # se non mantieni i log per-epoch, stampa il cumulato calcolato
                     print(f"[Epoch {self._epoch:02d}] FLOPs_epoch={self._epoch_flops:,} | cum={self.total_flops:,}")
 
-            yield e  # consente "for _ in ft(range(EPOCHS), ...)"
+            yield e
 
-        # export CSV (se richiesto)
+        # CSV export
         if export != "none":
             prefix = export_prefix or self.run_name
             if export in ("batch","both") and self.keep_batch_logs:
                 self.save_batch_csv(f"{prefix}_batch.csv")
             if export in ("epoch","both"):
-                # se non abbiamo log per-epoch ma vogliamo esportare, creali al volo con ultimo valore
                 if not self.keep_epoch_logs and self._epoch > 0:
                     self.epoch_logs.append(EpochLog(self._epoch, self._epoch_flops, self.total_flops))
                 self.save_epoch_csv(f"{prefix}_epoch.csv")
+
+        # chiudi W&B
+        self._wandb_finish()
+
+    # -------------------- Wandb helpers --------------------
+    def _wandb_setup(self, enable: bool, project: Optional[str], run_name: Optional[str], config: Dict[str, Any], log_mode: str, only_rank0: bool):
+        self._wb_enabled = False
+        if not enable:
+            return
+        # rank detection (DDP)
+        rank_env = os.environ.get("RANK")
+        is_rank0 = True
+        try:
+            if rank_env is not None:
+                is_rank0 = (int(rank_env) == 0)
+        except ValueError:
+            is_rank0 = True
+        self._wb["is_rank0"] = is_rank0 if only_rank0 else True
+        self._wb["only_rank0"] = only_rank0
+
+        # import lazy
+        try:
+            import wandb  # type: ignore
+        except Exception:
+            print("[flops-tracker] wandb non installato: `pip install wandb` per abilitare il logging.")
+            return
+
+        if self._wb["only_rank0"] and (not self._wb["is_rank0"]):
+            self._wb_enabled = True 
+            self._wb["log_mode"] = "none"  
+            self._wb["project"] = project
+            self._wb["run_name"] = run_name
+            self._wb["config"] = config
+            self._wb["run"] = None
+            return
+
+        # init effettivo
+        try:
+            self._wb["run"] = wandb.init(project=project or "flops-tracker",
+                                         name=run_name or self.run_name,
+                                         config=config or {},
+                                         reinit=True)
+            self._wb["project"] = project or "flops-tracker"
+            self._wb["run_name"] = run_name or self.run_name
+            self._wb["config"] = config or {}
+            self._wb["log_mode"] = log_mode
+            self._wb_enabled = True
+        except Exception as e:
+            print(f"[flops-tracker] impossibile inizializzare wandb: {e}")
+            self._wb_enabled = False
+
+    def _wandb_log(self, payload: Dict[str, Any], commit: bool):
+        if not self._wb_enabled:
+            return
+        if not self._wb["is_rank0"] and self._wb["only_rank0"]:
+            return
+        run = self._wb.get("run")
+        if run is None:
+            return
+        try:
+            import wandb  
+            wandb.log(payload, commit=commit)
+        except Exception as e:
+            print(f"[flops-tracker] wandb.log fallito: {e}")
+
+    def _wandb_finish(self):
+        if not self._wb_enabled:
+            return
+        if not self._wb["is_rank0"] and self._wb["only_rank0"]:
+            return
+        run = self._wb.get("run")
+        if run is None:
+            return
+        try:
+            import wandb  
+            wandb.finish()
+        except Exception:
+            pass
+        finally:
+            self._wb["run"] = None
+            self._wb_enabled = False

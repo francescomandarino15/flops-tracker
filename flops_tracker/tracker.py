@@ -15,6 +15,48 @@ class StepLog:
 class EpochLog:
     epoch:int; flops_epoch:int; flops_total_cum:int
 
+# -------------------- Helpers --------------------
+def _move_to_device(x, device):
+    """
+    Sposta ricorsivamente tensori su device.
+    Supporta: torch.Tensor, dict, list/tuple.
+    Altri tipi sono restituiti invariati.
+    """
+    try:
+        import torch
+        if torch.is_tensor(x):
+            return x.to(device)
+    except Exception:
+        pass
+    if isinstance(x, dict):
+        return {k: _move_to_device(v, device) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return type(x)(_move_to_device(v, device) for v in x)
+    return x
+
+def _infer_batch_size(data, target):
+    """
+    Tenta di dedurre il batch size cercando il primo tensore con dim>=1
+    in data (prioritario) o in target.
+    """
+    import torch
+    # prova in data
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, torch.Tensor) and v.dim() >= 1:
+                return int(v.size(0))
+    elif isinstance(data, (list, tuple)):
+        for v in data:
+            if isinstance(v, torch.Tensor) and v.dim() >= 1:
+                return int(v.size(0))
+    elif isinstance(data, torch.Tensor) and data.dim() >= 1:
+        return int(data.size(0))
+    # fallback: prova in target
+    if isinstance(target, torch.Tensor) and target.dim() >= 1:
+        return int(target.size(0))
+    # estremo
+    return 1
+
 # -------------------- Core Tracker --------------------
 class FlopsTracker:
     """
@@ -171,8 +213,8 @@ class FlopsTracker:
         wandb_config: Optional[Dict[str, Any]] = None,
         wandb_log: Literal["none","batch","epoch","both"] = "none",
         wandb_only_rank0: bool = True,
-        wandb_entity: Optional[str] = None,     
-        wandb_token: Optional[str] = None,      
+        wandb_entity: Optional[str] = None,
+        wandb_token: Optional[str] = None,
     ) -> int:
         for _ in self(
             range(epochs),
@@ -187,8 +229,8 @@ class FlopsTracker:
             wandb_config=wandb_config,
             wandb_log=wandb_log,
             wandb_only_rank0=wandb_only_rank0,
-            wandb_entity=wandb_entity,      
-            wandb_token=wandb_token,        
+            wandb_entity=wandb_entity,
+            wandb_token=wandb_token,
         ):
             pass
         return int(self.total_flops)
@@ -212,8 +254,8 @@ class FlopsTracker:
         wandb_config: Optional[Dict[str, Any]] = None,
         wandb_log: Literal["none","batch","epoch","both"] = "none",
         wandb_only_rank0: bool = True,
-        wandb_entity: Optional[str] = None,    
-        wandb_token: Optional[str] = None,      
+        wandb_entity: Optional[str] = None,
+        wandb_token: Optional[str] = None,
     ):
         # Se passi un intero, comportati come run()
         if isinstance(epoch_iterable, int):
@@ -243,8 +285,8 @@ class FlopsTracker:
             config=wandb_config or {},
             log_mode=wandb_log,
             only_rank0=wandb_only_rank0,
-            entity=wandb_entity,          
-            token=wandb_token,            
+            entity=wandb_entity,
+            token=wandb_token,
         )
 
         ctx = self._torch_ctx
@@ -271,18 +313,21 @@ class FlopsTracker:
                     data, target = batch[0], batch[1]
                 else:
                     raise ValueError("Il train_loader deve produrre (data, target).")
-                data, target = data.to(device), target.to(device)
+
+                # --- PATCH: sposta ricorsivamente su device
+                data, target = _move_to_device(data, device), _move_to_device(target, device)
 
                 optim.zero_grad(**ctx["zero_grad_kwargs"])
                 out = model(data)
                 loss = F.nll_loss(out, target) if loss_fn is None else loss_fn(out, target)
                 loss.backward(); optim.step()
 
-                # FLOPs + W&B batch log
-                self.update_batch(batch_size=data.size(0))
+                # --- PATCH: batch_size robusto anche per dict/tuple
+                bs = _infer_batch_size(data, target)
+                self.update_batch(batch_size=bs)
 
                 if print_level in ("batch","both"):
-                    print(f"[Epoch {self._epoch:02d} Step {step:04d}] batch_size={data.size(0)} | epoch_cum={self._epoch_flops:,} | total={self.total_flops:,}")
+                    print(f"[Epoch {self._epoch:02d} Step {step:04d}] batch_size={bs} | epoch_cum={self._epoch_flops:,} | total={self.total_flops:,}")
 
             self.on_epoch_end()
 
@@ -358,7 +403,7 @@ class FlopsTracker:
             self._wb["run"] = wandb.init(
                 project=project or "flops-tracker",
                 name=run_name or self.run_name,
-                entity=entity,               # <-- entity opzionale
+                entity=entity,
                 config=config or {},
                 reinit=True
             )

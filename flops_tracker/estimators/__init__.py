@@ -1,13 +1,9 @@
-from .tracker import FlopsTracker
-from .estimators import (
-    SklearnSGDEstimator,
-    TorchCNNLayerwiseEstimator,
-    TorchAutoEstimator,
-)
+from .sklearn_sgd import SklearnSGDEstimator
+from .torch_cnn import TorchCNNLayerwiseEstimator
+from .torch_auto import TorchAutoEstimator
 
 __all__ = [
-    "FlopsTracker",
-    "SklearnSGDEstimator",
+   "SklearnSGDEstimator",
     "TorchCNNLayerwiseEstimator",
     "TorchAutoEstimator",
 ]

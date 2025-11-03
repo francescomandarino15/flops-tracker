@@ -7,7 +7,7 @@ Stile **CodeCarbon**, ma agnostico all'hardware, la metrica tracciata è il **co
 - `FlopsTracker`: context manager per loggare FLOPs per **batch/epoch** e salvare CSV.
 - `SklearnSGDEstimator`: stimatore per **SGDClassifier** (LogReg/lineare) → ~ `4 · B · f · C`.
 - `TorchCNNLayerwiseEstimator`: stimatore layer-wise per **PyTorch CNN** (Conv2d/Linear) con **dry-run** per dedurre le shape; training ≈ `training_factor × forward` (default **3.0**).
-- `TorchAutoEstimator(model, input_example=(1, C, H, W)`: stimatore per i principali layer di **PyTorch** 
+- `TorchAutoEstimator(model, input_example=(1, C, H, W)`: stimatore per i principali layer di **PyTorch**
 
 **Assunzioni**:
 - 1 **MAC** = **2 FLOPs**.
@@ -36,6 +36,7 @@ Stile **CodeCarbon**, ma agnostico all'hardware, la metrica tracciata è il **co
 - print_level: "none" | "epoch" | "batch" | "both"
 - export: "none" | "epoch" | "batch" | "both"
 - export_prefix: prefisso file CSV (default = run_name)
+- gestione dei log con wandb
 
 ```python
 ft = FlopsTracker(est).torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
@@ -59,6 +60,18 @@ for _ in ft(range(EPOCHS), print_level="epoch", export="epoch", export_prefix="r
 # Stampa per batch+epoch + CSV batch+epoch
 for _ in ft(range(EPOCHS), print_level="both", export="both", export_prefix="run1"):
     pass  # crea run1_batch.csv e run1_epoch.csv
+
+# gestione dei log con wandb
+total = (FlopsTracker(est)
+         .torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
+         .run(EPOCHS,
+              print_level="epoch",                    # stampa locale
+              export="epoch", export_prefix="run1",   # CSV opzionali
+              wandb=True,                             # <— abilita W&B
+              wandb_project="flops-tracker",
+              wandb_run_name="cnn-baseline",
+              wandb_config={"model":"Cnn28x28","batch_size":128},
+              wandb_log="epoch"))                     # "none" | "batch" | "epoch" | "both"
 ```
 
 ## Installazione

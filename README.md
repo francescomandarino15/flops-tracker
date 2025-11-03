@@ -32,12 +32,20 @@ Stile **CodeCarbon**, ma agnostico all'hardware, la metrica tracciata è il **co
 
 ## API ad argomenti 
 **Opzioni chiave**:
+- print_Total_FLOPs ONE-LAYER
 - print_level: "none" | "epoch" | "batch" | "both"
 - export: "none" | "epoch" | "batch" | "both"
 - export_prefix: prefisso file CSV (default = run_name)
 
 ```python
 ft = FlopsTracker(est).torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
+
+# totale FLOPs ONE-LAYER (simulazione epoch dietro le quinte)
+total = (FlopsTracker(est)
+         .torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
+         .run(EPOCHS, print_level="none", export="none"))
+
+print("FLOPs totali:", total)
 
 # Solo totale FLOPs
 for _ in ft(range(EPOCHS), print_level="none", export="none"):

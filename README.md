@@ -5,9 +5,13 @@ Stile **CodeCarbon**, ma agnostico all'hardware, la metrica tracciata è il **co
 
 ## Caratteristiche
 - `FlopsTracker`: context manager per loggare FLOPs per **batch/epoch** e salvare CSV.
-- `SklearnSGDEstimator`: stimatore per **SGDClassifier** (LogReg/lineare) → ~ `4 · B · f · C`.
-- `TorchCNNLayerwiseEstimator`: stimatore layer-wise per **PyTorch CNN** (Conv2d/Linear) con **dry-run** per dedurre le shape; training ≈ `training_factor × forward` (default **3.0**).
+- `One-liner`: total = FlopsTracker(...).torch_bind(...).run(EPOCHS, ...)
+- `Iterabile` (stile tqdm): for _ in ft(range(EPOCHS), ...): pass
+-  `SklearnSGDEstimator`: stimatore per **SGDClassifier** (LogReg/lineare) → ~ `4 · B · f · C`.
+- `TorchCNNLayerwiseEstimator`:  stimatore layer-wise per **PyTorch CNN** (Conv2d/Linear) con **dry-run** per dedurre le shape; training ≈ `training_factor × forward` (default **3.0**).
 - `TorchAutoEstimator(model, input_example=(1, C, H, W)`: stimatore per i principali layer di **PyTorch**
+- `HF Adapters`: HFDecoderAdapter (GPT-2 & co.) e HFEncoderAdapter (BERT & co.) per usare batch dict (HuggingFace) senza cambiare il tracker.
+- `Gestione dei log tramite wandb`: logging opzionale "batch"|"epoch"|"both", con wandb_token e wandb_entity passabili direttamente al tracker.
 
 **Assunzioni**:
 - 1 **MAC** = **2 FLOPs**.
@@ -32,46 +36,49 @@ Stile **CodeCarbon**, ma agnostico all'hardware, la metrica tracciata è il **co
 
 ## API ad argomenti 
 **Opzioni chiave**:
-- print_Total_FLOPs ONE-LAYER
+- One-liner: run(EPOCHS, ...) restituisce i FLOPs totali (simulando le epoch dietro le quinte)
 - print_level: "none" | "epoch" | "batch" | "both"
 - export: "none" | "epoch" | "batch" | "both"
 - export_prefix: prefisso file CSV (default = run_name)
-- gestione dei log con wandb
+- wandb: wandb=True/False, wandb_project, wandb_run_name, wandb_log=("none"|"batch"|"epoch"|"both"), wandb_token, wandb_entity, wandb_only_rank0=True
 
 ```python
 ft = FlopsTracker(est).torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
 
-# totale FLOPs ONE-LAYER (simulazione epoch dietro le quinte)
+# Totale FLOPs ONE-LINER (simula il loop “dietro le quinte”)
 total = (FlopsTracker(est)
          .torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
          .run(EPOCHS, print_level="none", export="none"))
-
 print("FLOPs totali:", total)
 
-# Solo totale FLOPs
+# Solo totale (iterabile stile tqdm)
 for _ in ft(range(EPOCHS), print_level="none", export="none"):
     pass
 print(ft.total_flops)
 
-# Stampa per epoch + CSV epoch
+# Stampa per epoca + CSV epoca
 for _ in ft(range(EPOCHS), print_level="epoch", export="epoch", export_prefix="run1"):
-    pass  # crea run1_epoch.csv
+    pass  # → crea run1_epoch.csv
 
-# Stampa per batch+epoch + CSV batch+epoch
+# Stampa per batch+epoca + CSV batch+epoca
 for _ in ft(range(EPOCHS), print_level="both", export="both", export_prefix="run1"):
-    pass  # crea run1_batch.csv e run1_epoch.csv
+    pass  # → crea run1_batch.csv e run1_epoch.csv
+```
+## Gestione dei log con wandb
 
-# gestione dei log con wandb
+```python
+import os
 total = (FlopsTracker(est)
-         .torch_bind(model, optimizer, loss_fn=None, train_loader=train_loader, device=DEVICE)
+         .torch_bind(model, optimizer, None, train_loader, device=DEVICE)
          .run(EPOCHS,
-              print_level="epoch",                    # stampa locale
-              export="epoch", export_prefix="run1",   # CSV opzionali
-              wandb=True,                             # <— abilita 
+              print_level="epoch",
+              export="epoch", export_prefix="run1",
+              wandb=True,                       # abilita W&B
               wandb_project="flops-tracker",
               wandb_run_name="cnn-baseline",
-              wandb_config={"model":"Cnn28x28","batch_size":128},
-              wandb_log="epoch"))                     # "none" | "batch" | "epoch" | "both"
+              wandb_entity="my-team",           # opzionale
+              wandb_log="epoch",                # "none" | "batch" | "epoch" | "both"
+              wandb_token=os.getenv("WANDB_API_KEY")))
 ```
 
 ## Installazione
@@ -83,4 +90,3 @@ pip install -e .[torch,sklearn]
 # pip install -e .[torch]
 # pip install -e .[sklearn]
 ```
-

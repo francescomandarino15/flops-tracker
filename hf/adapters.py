@@ -1,50 +1,74 @@
 import torch
 import torch.nn as nn
 
+def _ensure_long(x):
+    # labels per i modelli HF di solito devono essere Long
+    return x if (x is None or x.dtype == torch.long) else x.long()
+
 class HFDecoderAdapter(nn.Module):
     """
-    Adatta un AutoModelForCausalLM (GPT-2, ecc.) al FlopsTracker.
-    Accetta:
-      - dict con chiavi ("input_ids","attention_mask","labels") per training;
-      - tuple (input_ids, attention_mask, labels) per dry-run dell'estimatore.
-    Ritorna il ModelOutput HF con .loss (se labels presenti) e .logits.
+    Adapter per AutoModelForCausalLM (GPT-2 & co.) in modo che il FlopsTracker
+    possa chiamare model(data) dove `data` può essere:
+      - dict con chiavi: input_ids[, attention_mask][, labels]
+      - tuple/list: (input_ids, attention_mask[, labels])
+      - tensore singolo: input_ids
+    Ritorna ModelOutput HF con .loss (se labels presenti) e .logits.
     """
-    def __init__(self, hf_model):
+    def __init__(self, hf_model: nn.Module):
         super().__init__()
         self.hf = hf_model
 
     def forward(self, batch):
+        # Caso 1: dict (forma nativa per HF)
         if isinstance(batch, dict):
-            return self.hf(**batch)
-        # altrimenti assumo tupla ordinata
-        if isinstance(batch, (list, tuple)) and len(batch) >= 2:
-            input_ids = batch[0]
-            attention_mask = batch[1] if len(batch) > 1 else None
-            labels = batch[2] if len(batch) > 2 else None
-            kwargs = {"input_ids": input_ids}
-            if attention_mask is not None: kwargs["attention_mask"] = attention_mask
-            if labels is not None: kwargs["labels"] = labels
-            return self.hf(**kwargs)
-        raise ValueError("HFDecoderAdapter: batch deve essere dict o (input_ids, attention_mask, [labels])")
+            kw = dict(batch)
+            if "labels" in kw and kw["labels"] is not None:
+                kw["labels"] = _ensure_long(kw["labels"])
+            return self.hf(**kw)
+
+        # Caso 2: sequenza (tuple/list) -> mappo in kwargs
+        if isinstance(batch, (tuple, list)):
+            if len(batch) == 3:
+                ids, mask, labels = batch
+                return self.hf(input_ids=ids, attention_mask=mask, labels=_ensure_long(labels))
+            if len(batch) == 2:
+                ids, mask = batch
+                return self.hf(input_ids=ids, attention_mask=mask)
+            raise ValueError("HFDecoderAdapter: attesa tuple/list con 2 o 3 elementi.")
+
+        # Caso 3: tensore singolo = solo input_ids
+        if torch.is_tensor(batch):
+            return self.hf(input_ids=batch)
+
+        raise ValueError("HFDecoderAdapter: batch deve essere dict, (ids,mask[,labels]) oppure Tensor (input_ids).")
+
 
 class HFEncoderAdapter(nn.Module):
     """
-    Adatta un AutoModelForSequenceClassification (BERT, ecc.) al FlopsTracker.
-    Stessa logica del decoder adapter.
+    Adapter per AutoModel / AutoModelForSequenceClassification (BERT & co.).
+    Stessa logica del decoder.
     """
-    def __init__(self, hf_model):
+    def __init__(self, hf_model: nn.Module):
         super().__init__()
         self.hf = hf_model
 
     def forward(self, batch):
         if isinstance(batch, dict):
-            return self.hf(**batch)
-        if isinstance(batch, (list, tuple)) and len(batch) >= 2:
-            input_ids = batch[0]
-            attention_mask = batch[1] if len(batch) > 1 else None
-            labels = batch[2] if len(batch) > 2 else None
-            kwargs = {"input_ids": input_ids}
-            if attention_mask is not None: kwargs["attention_mask"] = attention_mask
-            if labels is not None: kwargs["labels"] = labels
-            return self.hf(**kwargs)
-        raise ValueError("HFEncoderAdapter: batch deve essere dict o (input_ids, attention_mask, [labels])")
+            kw = dict(batch)
+            if "labels" in kw and kw["labels"] is not None:
+                kw["labels"] = _ensure_long(kw["labels"])
+            return self.hf(**kw)
+
+        if isinstance(batch, (tuple, list)):
+            if len(batch) == 3:
+                ids, mask, labels = batch
+                return self.hf(input_ids=ids, attention_mask=mask, labels=_ensure_long(labels))
+            if len(batch) == 2:
+                ids, mask = batch
+                return self.hf(input_ids=ids, attention_mask=mask)
+            raise ValueError("HFEncoderAdapter: attesa tuple/list con 2 o 3 elementi.")
+
+        if torch.is_tensor(batch):
+            return self.hf(input_ids=batch)
+
+        raise ValueError("HFEncoderAdapter: batch deve essere dict, (ids,mask[,labels]) oppure Tensor (input_ids).")
